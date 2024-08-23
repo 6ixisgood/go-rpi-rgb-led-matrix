@@ -1,8 +1,6 @@
 package rgbmatrix
 
 /*
-#cgo CFLAGS: -std=c99 -I${SRCDIR}/vendor/rpi-rgb-led-matrix/include -DSHOW_REFRESH_RATE
-#cgo LDFLAGS: -lrgbmatrix -L${SRCDIR}/vendor/rpi-rgb-led-matrix/lib -lstdc++ -lm
 #include <led-matrix-c.h>
 
 void led_matrix_swap(struct RGBLedMatrix *matrix, struct LedCanvas *offscreen_canvas,
@@ -43,7 +41,7 @@ import (
 	"os"
 	"unsafe"
 
-	"github.com/mcuadros/go-rpi-rgb-led-matrix/emulator"
+	"github.com/sixisgoood/go-rpi-rgb-led-matrix/emulator"
 )
 
 // DefaultConfig default WS281x configuration
@@ -97,13 +95,20 @@ type HardwareConfig struct {
 
 	// Name of GPIO mapping used
 	HardwareMapping string
+
+	// GPIO Slowdown Runtime Option
+	GpioSlowdown	int
+
+	//RateLimitHz
+
+	RateLimitHz int
 }
 
 func (c *HardwareConfig) geometry() (width, height int) {
 	return c.Cols * c.ChainLength, c.Rows * c.Parallel
 }
 
-func (c *HardwareConfig) toC() *C.struct_RGBLedMatrixOptions {
+func (c *HardwareConfig) toC() (*C.struct_RGBLedMatrixOptions, *C.struct_RGBLedRuntimeOptions) {
 	o := &C.struct_RGBLedMatrixOptions{}
 	o.rows = C.int(c.Rows)
 	o.cols = C.int(c.Cols)
@@ -114,6 +119,7 @@ func (c *HardwareConfig) toC() *C.struct_RGBLedMatrixOptions {
 	o.brightness = C.int(c.Brightness)
 	o.scan_mode = C.int(c.ScanMode)
 	o.hardware_mapping = C.CString(c.HardwareMapping)
+	o.limit_refresh_rate_hz = C.int(c.RateLimitHz)
 
 	if c.ShowRefreshRate == true {
 		C.set_show_refresh_rate(o, C.int(1))
@@ -133,7 +139,10 @@ func (c *HardwareConfig) toC() *C.struct_RGBLedMatrixOptions {
 		C.set_inverse_colors(o, C.int(0))
 	}
 
-	return o
+	ro := &C.struct_RGBLedRuntimeOptions{}
+	ro.gpio_slowdown = C.int(c.GpioSlowdown)
+
+	return o, ro
 }
 
 type ScanMode int8
@@ -173,7 +182,8 @@ func NewRGBLedMatrix(config *HardwareConfig) (c Matrix, err error) {
 	}
 
 	w, h := config.geometry()
-	m := C.led_matrix_create_from_options(config.toC(), nil, nil)
+	options, rOptions := config.toC()
+	m := C.led_matrix_create_from_options_and_rt_options(options, rOptions)
 	b := C.led_matrix_create_offscreen_canvas(m)
 	c = &RGBLedMatrix{
 		Config: config,
