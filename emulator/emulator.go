@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"image/draw"
 	"os"
 	"sync"
 
@@ -39,7 +40,7 @@ func NewEmulator(w, h, pixelPitch int, autoInit bool) *Emulator {
 		Height:                  h,
 		GutterColor:             color.Gray{Y: 20},
 		PixelPitchToGutterRatio: 2,
-		Margin:                  10,
+		Margin:                  1,
 	}
 	e.updatePixelPitchForGutter(pixelPitch / e.PixelPitchToGutterRatio)
 
@@ -64,11 +65,11 @@ func (e *Emulator) mainWindowLoop(s screen.Screen) {
 	var err error
 	e.s = s
 	// Calculate initial window size based on whatever our gutter/pixel pitch currently is.
-	dims := e.matrixWithMarginsRect()
+	//dims := e.matrixWithMarginsRect()
 	e.w, err = s.NewWindow(&screen.NewWindowOptions{
 		Title:  windowTitle,
-		Width:  dims.Max.X,
-		Height: dims.Max.Y,
+		Width:  600, //dims.Max.X,
+		Height: 600, //dims.Max.Y,
 	})
 
 	if err != nil {
@@ -168,18 +169,137 @@ func (e *Emulator) Geometry() (width, height int) {
 	return e.Width, e.Height
 }
 
-func (e *Emulator) Apply(leds []color.Color) error {
-	defer func() { e.leds = make([]color.Color, e.Height*e.Width) }()
+// func (e *Emulator) Apply(leds []color.Color) error {
+// 	start := time.Now()
+//     copy(e.leds, leds)
 
-	var c color.Color
-	for col := 0; col < e.Width; col++ {
-		for row := 0; row < e.Height; row++ {
-			c = e.At(col + (row * e.Width))
-			e.w.Fill(e.ledRect(col, row), c, screen.Over)
-		}
+
+//     var wg sync.WaitGroup
+//     for col := 0; col < e.Width; col++ {
+//         wg.Add(1)
+//         go func(col int) {
+//             defer wg.Done()
+//             for row := 0; row < e.Height; row++ {
+//                 c := e.At(col + (row * e.Width))
+//                 e.w.Fill(e.ledRect(col, row), c, screen.Over)
+//             }
+//         }(col)
+//     }
+//     wg.Wait()
+
+//     e.w.Publish()
+
+// 	log.Printf("Total Apply function time: %v\n", time.Since(start))
+
+//     return nil
+// }
+
+// func (e *Emulator) Apply(leds []color.Color) error {
+// 	start := time.Now()
+// 	log.Println("Starting Apply function")
+
+// 	// Step 1: Copy LEDs to the internal state
+// 	copy(e.leds, leds)
+
+// 	// Step 2: Create a buffer to draw the entire frame
+// 	buffer, err := e.s.NewBuffer(image.Point{X: e.Width, Y: e.Height})
+// 	if err != nil {
+// 		return err
+// 	}
+// 	defer buffer.Release()
+
+// 	// Step 3: Draw the frame in parallel using goroutines
+// 	var wg sync.WaitGroup
+// 	numWorkers := 4
+// 	columns := make(chan int, e.Width)
+
+// 	// Launch goroutines to fill the buffer
+// 	for i := 0; i < numWorkers; i++ {
+// 		wg.Add(1)
+// 		go func() {
+// 			defer wg.Done()
+// 			for col := range columns {
+// 				for row := 0; row < e.Height; row++ {
+// 					c := color.RGBAModel.Convert(e.At(col + row*e.Width)).(color.RGBA)
+// 					rect := e.ledRect(col, row)
+
+// 					// Create a one-pixel image with the color c
+// 					src := &image.Uniform{C: c}
+
+// 					// Corrected: use src.Bounds().Min to position the source correctly
+// 					draw.Draw(buffer.RGBA(), rect, src, src.Bounds().Min, draw.Src)
+// 				}
+// 			}
+// 		}()
+// 	}
+
+// 	// Fill the channel with column indices
+// 	for col := 0; col < e.Width; col++ {
+// 		columns <- col
+// 	}
+// 	close(columns)
+// 	wg.Wait()
+
+// 	// Step 4: Upload the buffer to the window
+// 	e.w.Upload(image.Point{}, buffer, buffer.Bounds())
+// 	e.w.Publish()
+
+// 	log.Printf("Total Apply function time: %v\n", time.Since(start))
+
+// 	return nil
+// }
+
+func (e *Emulator) Apply(leds []color.Color) error {
+	// copy LEDs to the internal state
+	copy(e.leds, leds)
+
+	// create a buffer to draw the entire frame
+	bufferSize := image.Point{
+		X: e.Width*(e.PixelPitch+e.Gutter) - e.Gutter + 2*e.Margin,
+		Y: e.Height*(e.PixelPitch+e.Gutter) - e.Gutter + 2*e.Margin,
+	}
+	buffer, err := e.s.NewBuffer(bufferSize)
+	if err != nil {
+		return err
+	}
+	defer buffer.Release()
+
+	// draw the frame in parallel using goroutines
+	var wg sync.WaitGroup
+	numWorkers := 4
+	columns := make(chan int, e.Width)
+
+	// Launch goroutines to fill the buffer
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for col := range columns {
+				for row := 0; row < e.Height; row++ {
+					c := color.RGBAModel.Convert(e.At(col + row*e.Width)).(color.RGBA)
+					rect := e.ledRect(col, row)
+
+					src := &image.Uniform{C: c}
+
+					draw.Draw(buffer.RGBA(), rect, src, image.Point{}, draw.Src)
+				}
+			}
+		}()
 	}
 
+	// Fill the channel with column indices
+	for col := 0; col < e.Width; col++ {
+		columns <- col
+	}
+	close(columns)
+	wg.Wait()
+
+	// Step 4: Upload the buffer to the window
+	e.w.Upload(image.Point{}, buffer, buffer.Bounds())
 	e.w.Publish()
+
+	//log.Printf("Total Apply function time: %v\n", time.Since(start))
+
 	return nil
 }
 
